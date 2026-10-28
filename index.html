@@ -56,16 +56,15 @@
     }
 
     /* =================================
-       SCROLL-CONTROLLED BACKGROUND VIDEO
-       فایل MP4 با نام دقیق زیر کنار index.html باشد
+       SCROLL-CONTROLLED VIDEO FRAMES
+       فریم‌های WebP از فایل MP4 کنار index.html ساخته شده‌اند
     ================================= */
 
-    #background-video {
+    #background-frames {
       position: fixed;
       inset: 0;
       width: 100%;
       height: 100%;
-      object-fit: cover;
       z-index: -3;
       opacity: .75;
       filter: brightness(1.1) contrast(1.05);
@@ -702,10 +701,8 @@
 
 <body>
 
-  <!-- نام فایل ویدیو در مخزن باید دقیقاً با این مسیر یکی باشد -->
-  <video id="background-video" muted playsinline preload="auto" aria-hidden="true">
-    <source src="./4a6b97b2-1507-41fa-9217-90602d8e1f52-video.mp4" type="video/mp4">
-  </video>
+  <!-- فریم‌های پس‌زمینه از ./4a6b97b2-1507-41fa-9217-90602d8e1f52-video.mp4 ساخته شده‌اند -->
+  <canvas id="background-frames" aria-hidden="true"></canvas>
 
   <!-- لایه‌های تزئینی -->
   <div class="video-overlay" aria-hidden="true"></div>
@@ -1041,10 +1038,13 @@
       });
     });
 
-    // کنترل نرم فریم‌های ویدیو با اسکرول کل صفحه
-    const backgroundVideo = document.getElementById("background-video");
-    const frameRate = 24;
-    let frameCount = 0;
+    // اسکراب فریم‌به‌فریم؛ روی موبایل رزولوشن و حافظهٔ کش محدود می‌شود
+    const frameCanvas = document.getElementById("background-frames");
+    const frameContext = frameCanvas.getContext("2d", { alpha: false });
+    const frameCount = 196;
+    const mobileMode = window.matchMedia("(max-width: 700px)").matches;
+    const frameCache = new Map();
+    const frameDigits = 4;
     let targetProgress = 0;
     let currentProgress = 0;
     let lastFrame = -1;
@@ -1056,62 +1056,78 @@
       requestAnimationFrame(animateFrames);
     }
 
-    function drawFrame(index) {
-      if (!frameCount || backgroundVideo.readyState < 1 || backgroundVideo.seeking) return;
-      if (index === lastFrame) return;
+    function getFrame(index, priority = "low") {
+      if (frameCache.has(index)) return frameCache.get(index);
+      const image = new Image();
+      image.decoding = "async";
+      image.fetchPriority = priority;
+      image.src = `./assets/frames/frame-${String(index).padStart(frameDigits, "0")}.webp`;
+      image.onload = requestFrameAnimation;
+      frameCache.set(index, image);
+      return image;
+    }
 
-      const targetTime = Math.min(
-        index / frameRate,
-        Math.max(0, backgroundVideo.duration - 1 / frameRate)
-      );
-      if (Math.abs(backgroundVideo.currentTime - targetTime) < 1 / (frameRate * 2)) {
-        lastFrame = index;
-        return;
+    function drawFrame(index) {
+      const image = getFrame(index, "high");
+      if (!image.complete || !image.naturalWidth || index === lastFrame) return;
+
+      const width = frameCanvas.clientWidth;
+      const height = frameCanvas.clientHeight;
+      const scale = Math.max(width / image.naturalWidth, height / image.naturalHeight);
+      const drawWidth = image.naturalWidth * scale;
+      const drawHeight = image.naturalHeight * scale;
+      frameContext.drawImage(image, (width - drawWidth) / 2, (height - drawHeight) / 2, drawWidth, drawHeight);
+      lastFrame = index;
+
+      const before = mobileMode ? 1 : 2;
+      const after = mobileMode ? 2 : 5;
+      for (let offset = -before; offset <= after; offset++) {
+        const nearby = index + offset;
+        if (nearby >= 0 && nearby < frameCount) getFrame(nearby);
       }
 
-      backgroundVideo.currentTime = targetTime;
-      lastFrame = index;
+      const cacheRadius = mobileMode ? 3 : 7;
+      for (const cachedIndex of frameCache.keys()) {
+        if (Math.abs(cachedIndex - index) > cacheRadius) frameCache.delete(cachedIndex);
+      }
     }
 
     function animateFrames() {
       animationQueued = false;
       const distance = targetProgress - currentProgress;
-      if (Math.abs(distance) > 0.0005) {
-        currentProgress += distance * 0.085;
-      } else {
-        currentProgress = targetProgress;
-      }
+      currentProgress = Math.abs(distance) > 0.0005
+        ? currentProgress + distance * 0.085
+        : targetProgress;
 
-      if (frameCount) {
-        drawFrame(Math.round(currentProgress * (frameCount - 1)));
-      }
-
-      if (Math.abs(targetProgress - currentProgress) > 0.0005) {
-        requestFrameAnimation();
-      }
+      drawFrame(Math.round(currentProgress * (frameCount - 1)));
+      if (Math.abs(targetProgress - currentProgress) > 0.0005) requestFrameAnimation();
     }
 
     function updateScrollTarget(instant = false) {
-      const maxScroll = Math.max(
-        1,
-        document.documentElement.scrollHeight - window.innerHeight
-      );
+      const maxScroll = Math.max(1, document.documentElement.scrollHeight - window.innerHeight);
       targetProgress = Math.min(1, Math.max(0, window.scrollY / maxScroll));
       if (instant) currentProgress = targetProgress;
       requestFrameAnimation();
     }
 
-    function initializeVideoTimeline() {
-      frameCount = Math.max(2, Math.round(backgroundVideo.duration * frameRate));
+    function resizeFrameCanvas() {
+      const maxPixelRatio = mobileMode ? 1.25 : 2;
+      const pixelRatio = Math.min(window.devicePixelRatio || 1, maxPixelRatio);
+      frameCanvas.width = Math.round(frameCanvas.clientWidth * pixelRatio);
+      frameCanvas.height = Math.round(frameCanvas.clientHeight * pixelRatio);
+      frameContext.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
+      frameContext.imageSmoothingEnabled = true;
+      frameContext.imageSmoothingQuality = "high";
       lastFrame = -1;
-      updateScrollTarget(true);
+      requestFrameAnimation();
     }
 
     window.addEventListener("scroll", () => updateScrollTarget(), { passive: true });
-    window.addEventListener("resize", () => updateScrollTarget());
-    backgroundVideo.addEventListener("loadedmetadata", initializeVideoTimeline);
-    backgroundVideo.addEventListener("seeked", requestFrameAnimation);
-    backgroundVideo.load();
+    window.addEventListener("resize", () => {
+      resizeFrameCanvas();
+      updateScrollTarget();
+    });
+    resizeFrameCanvas();
     updateScrollTarget(true);
   </script>
 
